@@ -1,0 +1,47 @@
+
+
+def openwin():
+    from videotrans.winform import get_cls
+    from videotrans.util.help_misc import set_process
+    from videotrans.configure.config import tr,params,app_cfg
+    from videotrans import recognition
+    from videotrans.util.TestSTT import TestSTT
+    from videotrans.winform._helpers import make_feed_stt
+    from pathlib import Path
+
+
+    winobj = get_cls(Path(__file__).stem)()
+    winobj.update_ui()
+
+    feed = make_feed_stt(winobj, "test")
+
+    def _fix_url(url):
+        if not url.startswith('http'):
+            url = 'http://' + url
+        url = url.replace('/audio/transcriptions', '').strip('/')
+        if not url.endswith('/v1'):
+            url = url + '/v1'
+        return url
+
+    def test():
+        url = winobj.parakeet_api.text().strip().strip('/')
+        if not url:
+            return
+        params["parakeet_api"] = _fix_url(url)
+        winobj.test.setText(tr("Testing..."))
+        task = TestSTT(parent=winobj, recogn_type=recognition.PARAKEET)
+        task.uito.connect(feed)
+        task.start()
+
+    def save():
+        url = winobj.parakeet_api.text().strip()
+        if not url:
+            return
+        params["parakeet_api"] = _fix_url(url)
+        params.save()
+        set_process(text='', type="refreshtts")
+        winobj.close()
+
+    winobj.set_btn.clicked.connect(save)
+    winobj.test.clicked.connect(test)
+    return winobj

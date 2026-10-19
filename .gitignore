@@ -1,0 +1,38 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment and provisioned tools (created by `setup`)
+runtime/pyvideotrans/.venv/
+.venv/
+tools/
+
+# Runtime state: may contain API keys and machine-specific paths
+runtime/pyvideotrans/videotrans/params.json
+runtime/pyvideotrans/videotrans/params.json.bak
+runtime/pyvideotrans/videotrans/params.json.tmp
+runtime/pyvideotrans/videotrans/cfg.json
+runtime/pyvideotrans/videotrans/codec.json
+runtime/pyvideotrans/videotrans/languages.json
+runtime/pyvideotrans/videotrans/voicejson/camb_languages.json
+
+# ASR models, task output, temp files and logs
+runtime/pyvideotrans/models/
+runtime/pyvideotrans/output/
+runtime/pyvideotrans/tmp/
+runtime/pyvideotrans/logs/
+*.log
+
+# Bundled ffmpeg binaries (downloaded, not source)
+runtime/pyvideotrans/ffmpeg/bin/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Partial downloads
+*.part

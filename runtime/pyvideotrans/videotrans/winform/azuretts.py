@@ -1,0 +1,59 @@
+
+
+def openwin():
+    from videotrans.winform import get_cls
+    from pathlib import Path
+    from videotrans.configure.constants import LISTEN_TEXT
+    from videotrans.util.help_misc import show_error
+    from videotrans.configure.config import tr,app_cfg,params
+    from videotrans.configure import config
+    from videotrans.util.ListenVoice import ListenVoice
+
+
+    winobj = get_cls(Path(__file__).stem)()
+
+    def feed(d):
+        if d == "ok":
+            from PySide6 import QtWidgets
+            QtWidgets.QMessageBox.information(winobj, "ok", "Test Ok")
+        else:
+            show_error(d)
+        winobj.test.setText(tr("Test"))
+
+    def test():
+        key = winobj.speech_key.text().strip()
+        if not key:
+            show_error('填写Azure speech key ')
+            return
+        region = winobj.speech_region.text().strip()
+        if not region or not region.startswith('https:'):
+            region = winobj.azuretts_area.currentText()
+        params['azuretts_key'] = key
+        params['azuretts_region'] = region
+        from videotrans import tts
+        import time
+        wk = ListenVoice(parent=winobj, queue_tts=[{"text":  LISTEN_TEXT.get('zh'), "role": 'zh-CN-YunjianNeural',
+                                                    "filename": config.TEMP_DIR + f"/{time.time()}-azure.wav",
+                                                    "tts_type": tts.AZURE_TTS}], language="zh", tts_type=tts.AZURE_TTS)
+        wk.uito.connect(feed)
+        wk.start()
+        winobj.test.setText('Testing...')
+
+    def save():
+        params['azuretts_key'] = winobj.speech_key.text().strip()
+        region = winobj.speech_region.text().strip()
+        if not region or not region.startswith('https:'):
+            region = winobj.azuretts_area.currentText()
+        params['azuretts_region'] = region
+        params.save()
+        winobj.close()
+
+    if params.get('azuretts_region','') and params.get('azuretts_region','').startswith('http'):
+        winobj.speech_region.setText(str(params.get('azuretts_region','')))
+    else:
+        winobj.azuretts_area.setCurrentText(str(params.get('azuretts_region','')))
+    if params.get('azuretts_key',''):
+        winobj.speech_key.setText(str(params.get('azuretts_key','')))
+    winobj.save.clicked.connect(save)
+    winobj.test.clicked.connect(test)
+    return winobj

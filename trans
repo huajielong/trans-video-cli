@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Cross-platform launcher for trans_video_cli (macOS / Linux).
+# Usage: ./trans selftest
+#        ./trans vtv movie.mp4 --source zh-cn --target en
+exec python3 "$(dirname "$0")/.claude/skills/trans-video-cli/scripts/trans_cli.py" "$@"
