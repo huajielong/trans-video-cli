@@ -7,12 +7,12 @@ version 3 (GPL-3.0). See LICENSE for the full text.
 Third-party components
 ======================
 
-runtime/pyvideotrans/
+.claude/skills/trans-video-cli/vendor/pyvideotrans/
     pyVideoTrans v4.16
     Copyright (C) the pyVideoTrans authors
     License: GNU General Public License v3.0
     Upstream: https://github.com/jianchang512/pyvideotrans
-    License text: runtime/pyvideotrans/LICENSE
+    License text: .claude/skills/trans-video-cli/vendor/pyvideotrans/LICENSE
 
     The vendored runtime is unmodified upstream source. The CLI wrapper
     patches only pyproject.toml during `setup` (PyTorch index and optional
@@ -22,9 +22,10 @@ runtime/pyvideotrans/
     .claude/skills/trans-video-cli/scripts/trans_cli.py and references/
     are derived from pyVideoTrans source files.
 
-runtime/pyvideotrans/videotrans/styles/simhei.ttf
+.claude/skills/trans-video-cli/vendor/pyvideotrans/videotrans/styles/simhei.ttf
     Bundled by the upstream project; copyright belongs to its respective
     owner(s).
 
-Python dependencies are not vendored in this repository. They are resolved
-by `uv sync` during `setup`, and remain subject to their own licenses.
+Python dependencies and provisioned tools are not vendored in this repository.
+They are resolved by `uv sync` / downloaded by `setup` into the skill directory,
+and remain subject to their own licenses.

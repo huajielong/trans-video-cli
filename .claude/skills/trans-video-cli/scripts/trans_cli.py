@@ -41,7 +41,7 @@ Examples
 
 Environment
 -----------
-  PYVIDEOTRANS_HOME   pyVideoTrans checkout (default: bundled runtime, then ~/pyvideotrans)
+  PYVIDEOTRANS_HOME   pyVideoTrans checkout (default: vendored runtime, then ~/pyvideotrans)
   UV_BIN / FFMPEG_BIN / FFPROBE_BIN / OLLAMA_BIN  explicit tool paths
   HTTPS_PROXY         used for downloads and cloud APIs (git config is a fallback)
   DEEPSEEK_API_KEY, OPENAI_API_KEY, ZHIPUAI_API_KEY, ...  channel credentials
@@ -70,17 +70,23 @@ import zipfile
 from pathlib import Path
 from typing import NoReturn
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
-# Layout: <package>/.claude/skills/trans-video-cli/scripts/trans_cli.py
+# Layout: <skill>/scripts/trans_cli.py
+#         <skill>/vendor/pyvideotrans   (tracked upstream source)
+#         <skill>/tools                 (provisioned, untracked)
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
-PACKAGE_ROOT = SKILL_DIR.parent.parent.parent
-BUNDLED_HOME = PACKAGE_ROOT / "runtime" / "pyvideotrans"
+BUNDLED_HOME = SKILL_DIR / "vendor" / "pyvideotrans"
 
 # Provisioned tools and download cache (cache-first: never re-download what is here).
-TOOLS_DIR = PACKAGE_ROOT / "tools"
+TOOLS_DIR = SKILL_DIR / "tools"
 DOWNLOAD_CACHE = TOOLS_DIR / "_cache"
+
+# Pre-1.3 layout, used only by `setup` for one-time state migration.
+LEGACY_PACKAGE_ROOT = SKILL_DIR.parent.parent.parent
+LEGACY_HOME = LEGACY_PACKAGE_ROOT / "runtime" / "pyvideotrans"
+LEGACY_TOOLS = LEGACY_PACKAGE_ROOT / "tools"
 OS_NAME = platform.system().lower()
 IS_WINDOWS = OS_NAME == "windows"
 IS_LINUX = OS_NAME == "linux"
@@ -88,12 +94,12 @@ IS_MAC = OS_NAME == "darwin"
 ARCH = platform.machine().lower()
 
 # Legacy / external install used when the package has not been bootstrapped.
-# The bundled runtime is always preferred; this is only a fallback.
+# The vendored runtime is always preferred; this is only a fallback.
 DEFAULT_HOME = str(Path.home() / "pyvideotrans")
 DEFAULT_ASR_MODEL = os.environ.get("TRANS_ASR_MODEL", "large-v3-turbo")
 DEFAULT_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
-# What gets copied from an existing checkout into runtime/pyvideotrans.
+# What gets copied from an existing checkout into vendor/pyvideotrans.
 COPY_ENTRIES = [
     "cli.py", "sp.py", "webui.py", "pyproject.toml", "uv.lock",
     ".python-version", "README.md", "LICENSE",
@@ -249,11 +255,339 @@ def _is_program(path: Path) -> bool:
     return (path / "cli.py").is_file()
 
 
+# --------------------------------------------------------------------------
+# Layout migration (pre-1.3 package root -> skill-local vendor/tools)
+# --------------------------------------------------------------------------
+def _same_path(a: Path | None, b: Path | None) -> bool:
+    if a is None or b is None:
+        return False
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
+def _is_within(child: Path, parent: Path) -> bool:
+    try:
+        child = child.resolve()
+        parent = parent.resolve()
+    except OSError:
+        return False
+    return child != parent and parent in child.parents
+
+
+def _is_link(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        isjunction = getattr(os.path, "isjunction", None)
+        return bool(isjunction and isjunction(path))
+    except OSError:
+        return False
+
+
+def _looks_like_runtime_state(path: Path | None) -> bool:
+    if path is None or not path.is_dir():
+        return False
+    return any((path / name).exists() for name in (
+        "cli.py", "pyproject.toml", "videotrans", "models",
+        "logs", "tmp", "output", ".venv"))
+
+
+def _launcher_mentions_this_skill(path: Path) -> bool:
+    try:
+        return path.is_file() and "trans_cli.py" in path.read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def _assert_migration_paths_safe(legacy_home: Path | None,
+                                 legacy_tools: Path | None) -> None:
+    for label, path in (("legacy runtime", legacy_home),
+                        ("legacy tools", legacy_tools)):
+        if path is not None and _is_link(path):
+            fail(
+                f"refusing to migrate through a symlink/junction ({label}): {path}\n"
+                f"Pass --migrate-from with the real directory path."
+            )
+    if legacy_home is not None:
+        if _same_path(legacy_home, BUNDLED_HOME):
+            fail(f"--migrate-from points at the skill runtime itself: {legacy_home}")
+        if _is_within(SKILL_DIR, legacy_home) or _is_within(legacy_home, SKILL_DIR):
+            fail(
+                f"refusing to migrate {legacy_home}: it overlaps the skill "
+                f"directory {SKILL_DIR}."
+            )
+    if legacy_tools is not None:
+        if _same_path(legacy_tools, TOOLS_DIR):
+            fail(f"--migrate-from points at the skill tools directory itself: {legacy_tools}")
+        if _is_within(TOOLS_DIR, legacy_tools) or _is_within(legacy_tools, TOOLS_DIR):
+            fail(
+                f"refusing to migrate {legacy_tools}: it overlaps the skill "
+                f"tools directory {TOOLS_DIR}."
+            )
+
+
+def _detect_legacy(args) -> tuple[Path | None, Path | None]:
+    """Find pre-1.3 runtime state. Returns (legacy_home, legacy_tools)."""
+    explicit = getattr(args, "migrate_from", None)
+    if explicit:
+        root = Path(explicit).expanduser().resolve()
+        if not root.is_dir():
+            fail(f"--migrate-from {root}: directory not found")
+        nested = root / "runtime" / "pyvideotrans"
+        if _looks_like_runtime_state(nested):
+            home = nested
+        elif _looks_like_runtime_state(root):
+            home = root
+        else:
+            home = None
+        if nested.is_dir() or (root / "tools").is_dir():
+            tools = root / "tools"
+        elif home is not None and home.parent.name == "runtime":
+            tools = home.parent.parent / "tools"
+        else:
+            tools = None
+        if tools is not None and not tools.is_dir():
+            tools = None
+        if home is None and tools is None:
+            fail(
+                f"--migrate-from {root}: no legacy runtime state found "
+                f"(expected {root}/runtime/pyvideotrans or a pyvideotrans tree)."
+            )
+        _assert_migration_paths_safe(home, tools)
+        return home, tools
+
+    home = LEGACY_HOME
+    home_ok = _looks_like_runtime_state(home)
+    tools_ok = LEGACY_TOOLS.is_dir()
+    if not home_ok and not tools_ok:
+        return None, None
+    if _same_path(home, BUNDLED_HOME):
+        return None, None
+    # A global install puts parent^3 at the user's home, where an unrelated
+    # ~/runtime/pyvideotrans could exist. Only auto-migrate when that
+    # directory is recognizably this package (its launchers forward to us).
+    if not (_launcher_mentions_this_skill(LEGACY_PACKAGE_ROOT / "trans.cmd")
+            or _launcher_mentions_this_skill(LEGACY_PACKAGE_ROOT / "trans")):
+        log(
+            f"note: ignoring possible legacy runtime at "
+            f"{home if home_ok else LEGACY_TOOLS}: {LEGACY_PACKAGE_ROOT} is not "
+            f"this package's root (use --migrate-from <dir> to migrate explicitly)."
+        )
+        return None, None
+    _assert_migration_paths_safe(home if home_ok else None,
+                                 LEGACY_TOOLS if tools_ok else None)
+    return (home if home_ok else None), (LEGACY_TOOLS if tools_ok else None)
+
+
+def _ensure_writable(path: Path) -> None:
+    probe = path / ".trans_write_probe"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        fail(
+            f"the skill directory is not writable: {path} ({exc}).\n"
+            f"Copy the skill to a writable location (e.g. ~/.claude/skills/) and retry."
+        )
+
+
+def _merge_move_file(src: Path, dst: Path) -> bool:
+    """Move one file; the destination wins. Never deletes the source here."""
+    if not src.is_file() or dst.exists():
+        return False
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+    except OSError as exc:
+        fail(
+            f"migration failed for {src} -> {dst}: {exc}\n"
+            f"Close any running trans/uv/Ollama processes and retry.",
+            code=1,
+        )
+    return True
+
+
+def _merge_move_dir(src: Path, dst: Path, label: str, fatal: bool = True) -> None:
+    """Recursively move entries missing at dst; existing destination entries win."""
+    if not src.is_dir():
+        return
+    try:
+        dst.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        if fatal:
+            fail(f"cannot create {dst}: {exc}", code=1)
+        log(f"WARNING: cannot create {dst}: {exc}")
+        return
+    for child in list(src.iterdir()):
+        target = dst / child.name
+        try:
+            if not target.exists():
+                shutil.move(str(child), str(target))
+            elif child.is_dir() and target.is_dir():
+                _merge_move_dir(child, target, f"{label}/{child.name}", fatal)
+            else:
+                log(f"WARNING: {target} already exists; keeping it and leaving "
+                    f"{child} in place")
+        except OSError as exc:
+            message = f"migration failed for {child} -> {target}: {exc}"
+            if fatal:
+                fail(message + "\nClose any running trans/uv/Ollama processes "
+                               "and retry.", code=1)
+            log(f"WARNING: {message}")
+
+
+def _merge_params_file(src: Path, dst: Path) -> int:
+    """Merge legacy params into the destination, filling only missing/empty keys."""
+    if not src.is_file():
+        return 0
+    if not dst.is_file():
+        _merge_move_file(src, dst)
+        return 0
+    try:
+        legacy = json.loads(src.read_text(encoding="utf-8"))
+        current = json.loads(dst.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        fail(f"cannot merge {src} into {dst}: {exc}; legacy file kept intact",
+             code=1)
+    if not isinstance(legacy, dict) or not isinstance(current, dict):
+        fail(f"cannot merge {src} into {dst}: unexpected JSON shape", code=1)
+    filled = 0
+    for key, value in legacy.items():
+        if value in ("", None):
+            continue
+        if key not in current or current[key] in ("", None):
+            current[key] = value
+            filled += 1
+    if filled:
+        tmp = dst.with_name(dst.name + ".migrate.tmp")
+        tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        os.replace(tmp, dst)
+    return filled
+
+
+def _migrate_tools(legacy_tools: Path | None) -> None:
+    if not legacy_tools or not legacy_tools.is_dir():
+        return
+    if _same_path(legacy_tools, TOOLS_DIR):
+        return
+    log(f"migrating tools: {legacy_tools} -> {TOOLS_DIR}")
+    _merge_move_dir(legacy_tools, TOOLS_DIR, "tools")
+
+
+def _migrate_state(legacy_home: Path | None, runtime: Path) -> None:
+    if not legacy_home or not legacy_home.is_dir():
+        return
+    if _same_path(legacy_home, runtime):
+        return
+    runtime.mkdir(parents=True, exist_ok=True)
+    log(f"migrating runtime state: {legacy_home} -> {runtime}")
+
+    filled = _merge_params_file(
+        legacy_home / "videotrans" / "params.json",
+        runtime / "videotrans" / "params.json",
+    )
+    if filled:
+        log(f"params.json: filled {filled} missing/empty value(s) from legacy config")
+
+    for rel in ("videotrans/cfg.json", "videotrans/codec.json",
+                "videotrans/languages.json",
+                "videotrans/voicejson/camb_languages.json"):
+        _merge_move_file(legacy_home / rel, runtime / rel)
+
+    for name in ("models", "output"):
+        _merge_move_dir(legacy_home / name, runtime / name, name)
+    _merge_move_dir(legacy_home / "logs", runtime / "logs", "logs", fatal=False)
+
+
+def _rmdir_if_empty(path: Path) -> bool:
+    try:
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+            return True
+    except OSError as exc:
+        log(f"WARNING: could not remove empty directory {path}: {exc}")
+    return False
+
+
+def _remove_tree(path: Path, label: str) -> bool:
+    if not path.exists():
+        return True
+
+    def _onerror(func, p, exc_info):  # noqa: ANN001
+        try:
+            os.chmod(p, os.stat(p).st_mode | 0o200)
+            func(p)
+        except OSError:
+            pass
+
+    for attempt in range(3):
+        try:
+            shutil.rmtree(path, onerror=_onerror)
+            return True
+        except OSError as exc:
+            if attempt == 2:
+                log(f"WARNING: could not remove {label} {path}: {exc}")
+                return False
+            time.sleep(0.5)
+    return False
+
+
+def _cleanup_legacy(legacy_home: Path | None, legacy_tools: Path | None,
+                    runtime: Path, sync_ok: bool) -> None:
+    """Remove migrated legacy state. Only runs after the new venv is ready."""
+    if not sync_ok:
+        if legacy_home or legacy_tools:
+            log("legacy cleanup deferred until the skill venv is ready "
+                "(old state kept)")
+        return
+    if legacy_home and legacy_home.is_dir() and not _same_path(legacy_home, runtime):
+        log(f"cleaning legacy runtime: {legacy_home}")
+        for name in ("models", "logs", "output"):
+            path = legacy_home / name
+            if path.is_dir() and any(path.iterdir()):
+                log(f"WARNING: keeping {path}: it still contains unmigrated files")
+            else:
+                _rmdir_if_empty(path)
+        _remove_tree(legacy_home / "tmp", "legacy temp dir")
+        for rel in ("videotrans/params.json", "videotrans/params.json.bak",
+                    "videotrans/params.json.tmp", "videotrans/cfg.json",
+                    "videotrans/codec.json", "videotrans/languages.json",
+                    "videotrans/voicejson/camb_languages.json"):
+            path = legacy_home / rel
+            if path.is_file():
+                log(f"WARNING: keeping {path}: it was not migrated")
+        _remove_tree(legacy_home / ".venv", "legacy venv")
+        _rmdir_if_empty(legacy_home)
+        if legacy_home.parent.name == "runtime":
+            _rmdir_if_empty(legacy_home.parent)
+    if (legacy_tools and legacy_tools.is_dir()
+            and not _same_path(legacy_tools, TOOLS_DIR)):
+        if any(legacy_tools.iterdir()):
+            log(f"WARNING: keeping {legacy_tools}: it still contains unmigrated files")
+        else:
+            _rmdir_if_empty(legacy_tools)
+
+
+def latest_log(home: Path) -> Path | None:
+    for logs in (home / "logs", home / "videotrans" / "logs"):
+        if logs.is_dir():
+            recent = sorted(logs.glob("*.log"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+            if recent:
+                return recent[0]
+    return None
+
+
 def resolve_home_info(args) -> tuple[Path, str]:
     """Resolve the pyVideoTrans checkout and say where it came from.
 
-    Order: --home > PYVIDEOTRANS_HOME > bundled runtime > external default.
-    The bundled runtime is what makes this package portable: once `setup` has
+    Order: --home > PYVIDEOTRANS_HOME > vendored runtime > external default.
+    The vendored runtime is what makes this skill portable: once `setup` has
     run, no external pyvideotrans installation is needed.
     """
     explicit = getattr(args, "home", None)
@@ -279,7 +613,7 @@ def resolve_home_info(args) -> tuple[Path, str]:
 
     fail(
         "no pyVideoTrans installation found.\n"
-        "  - Run `trans_cli.py setup` to create the bundled runtime, or\n"
+        "  - Run `trans_cli.py setup` to create the vendored runtime, or\n"
         "  - set PYVIDEOTRANS_HOME / pass --home <dir> (must contain cli.py)."
     )
 
@@ -353,7 +687,12 @@ def _sanitize_cfg_file(path: Path, runtime: Path) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _copy_runtime(source: Path, dest: Path, update: bool) -> None:
+def _copy_runtime(source: Path, dest: Path, update: bool) -> bool:
+    if _same_path(source, dest):
+        log("source and destination are the same; skipping copy")
+        return False
+    if _is_within(dest, source):
+        fail(f"refusing to copy {source} into itself ({dest})")
     dest.mkdir(parents=True, exist_ok=True)
     existing_cfg = dest / "videotrans" / "params.json"
     cfg_backup = existing_cfg.read_bytes() if update and existing_cfg.is_file() else None
@@ -378,6 +717,7 @@ def _copy_runtime(source: Path, dest: Path, update: bool) -> None:
     if bak.is_file():
         bak.unlink()
     _sanitize_cfg_file(dest / "videotrans" / "cfg.json", dest)
+    return True
 
 
 def uv_bin() -> str:
@@ -541,6 +881,14 @@ def resolve_outdir(home: Path, input_path: Path, outdir: str | None, overwrite: 
     dangerous = {Path.home().resolve(), Path(out.anchor).resolve(), home.resolve()}
     if out in dangerous:
         fail(f"refusing to use {out} as output directory: too broad / would delete important data.")
+
+    skill = SKILL_DIR.resolve()
+    if out == skill or out in skill.parents or skill in out.parents:
+        fail(
+            f"refusing to use {out} as output directory: it overlaps the skill "
+            f"installation ({skill}), and pyVideoTrans would delete it. "
+            f"Choose a different --outdir."
+        )
 
     out.mkdir(parents=True, exist_ok=True)
     return out
@@ -974,7 +1322,8 @@ def _drop_source_block(pyproject: Path, name: str) -> bool:
 def model_cache_dirs() -> list[Path]:
     dirs: list[Path] = []
     seen: set[str] = set()
-    for base in (os.environ.get("PYVIDEOTRANS_HOME"), DEFAULT_HOME):
+    for base in (os.environ.get("PYVIDEOTRANS_HOME"), DEFAULT_HOME,
+                 str(BUNDLED_HOME), str(LEGACY_HOME)):
         if not base:
             continue
         path = Path(base).expanduser() / "models"
@@ -1085,63 +1434,90 @@ def detect_environment() -> dict:
         "recommended_torch": "cu128" if nvidia else "cpu",
         "ollama": resolve_ollama_binary() or "(not installed)",
         "ollama_service": "running" if ollama_api_ready() else "stopped",
+        "skill_dir": str(SKILL_DIR),
+        "bundled_home": str(BUNDLED_HOME),
         "tools_dir": str(TOOLS_DIR),
     }
 
 
 def cmd_setup(args) -> int:
-    """Provision the package: detect the machine, reuse caches, download what is missing."""
+    """Provision the skill: detect the machine, reuse caches, download what is missing."""
     proxy = proxy_url(args.proxy)
     auto = not args.no_download
-    env_info = detect_environment()
 
+    # 0) The skill directory must be writable: setup creates tools, the venv,
+    #    models and params there.
+    _ensure_writable(SKILL_DIR)
+
+    # 1) migrate pre-1.3 state (tools first, so detection can see them)
+    legacy_home, legacy_tools = _detect_legacy(args)
+    if legacy_home:
+        log(f"legacy runtime detected: {legacy_home}")
+    if legacy_tools:
+        log(f"legacy tools detected:   {legacy_tools}")
+    _migrate_tools(legacy_tools)
+
+    env_info = detect_environment()
     log("environment:")
     for key in ("os", "arch", "nvidia_gpu", "nvidia_driver",
                 "recommended_torch", "uv", "ffmpeg", "ollama"):
         log(f"  {key:20} {env_info.get(key, '')}")
 
-    # 1) uv - required to create the venv and to run cli.py
+    # 2) uv - required to create the venv and to run cli.py
     uv = resolve_uv(auto=auto, proxy=proxy)
     log(f"uv: {uv}")
 
-    # 2) ffmpeg / ffprobe - reuse PATH or a previous download; fetch if absent
+    # 3) ffmpeg / ffprobe - reuse PATH or a previous download; fetch if absent
     ff = resolve_ffmpeg(auto=auto, proxy=proxy)
     if ff:
         log(f"ffmpeg: {ff[0]}")
     else:
         log("WARNING: ffmpeg not found and downloads are disabled")
 
-    # 3) copy the source tree
+    # 4) use the vendored source shipped with the skill; copy only when it is
+    #    missing or the user explicitly passes --copy-from.
     runtime = BUNDLED_HOME
-    needs_copy = args.force or not _is_program(runtime)
-
     source = None
     if args.copy_from:
         source = Path(args.copy_from).expanduser().resolve()
         if not _is_program(source):
             fail(f"--copy-from {source} has no cli.py")
-    elif needs_copy:
+    elif not _is_program(runtime):
         candidates = []
         env_home = os.environ.get("PYVIDEOTRANS_HOME")
         if env_home:
             candidates.append(Path(env_home).expanduser().resolve())
+        if legacy_home and _is_program(legacy_home):
+            candidates.append(legacy_home)
         candidates.append(Path(DEFAULT_HOME).expanduser().resolve())
         source = next((c for c in candidates if _is_program(c)), None)
         if source is None:
             fail(
-                "no source checkout to copy from.\n"
-                "Pass --copy-from <dir> pointing at a pyVideoTrans checkout (must contain cli.py)."
+                "vendored pyVideoTrans source is missing: "
+                f"{runtime} (no cli.py).\n"
+                "Reinstall the skill directory, or pass --copy-from <dir> "
+                "pointing at a pyVideoTrans checkout."
             )
 
-    if needs_copy and source:
+    if source:
         log(f"copying source: {source}")
         log(f"            to: {runtime}")
-        _copy_runtime(source, runtime, update=runtime.exists())
-        log(f"source copied ({_source_size_mb(runtime):.1f} MB; secrets blanked, cfg.json made portable)")
+        if _copy_runtime(source, runtime, update=runtime.exists()):
+            log(f"source copied ({_source_size_mb(runtime):.1f} MB; "
+                f"secrets blanked, cfg.json made portable)")
     else:
-        log(f"bundled runtime already present: {runtime}")
+        log(f"vendored runtime: {runtime}")
+        if args.force:
+            log("--force: source is shipped with the skill; refreshing provisioning "
+                "only (use --copy-from to replace it)")
 
-    # 4) pick the PyTorch build that matches this machine
+    # 5) migrate runtime state after the source is in place, so a copy cannot
+    #    overwrite migrated params. cfg.json is always re-sanitized because a
+    #    copied skill may carry a stale absolute homedir.
+    _migrate_state(legacy_home, runtime)
+    _sanitize_cfg_file(runtime / "videotrans" / "cfg.json", runtime)
+
+    # 6) pick the PyTorch build that matches this machine
     variant = args.torch
     if variant == "auto":
         variant = "cu128" if env_info["nvidia_gpu"] != "(none detected)" else "cpu"
@@ -1150,7 +1526,7 @@ def cmd_setup(args) -> int:
     else:
         log(f"torch variant: {variant} (already configured)")
 
-    # 5) pynini/WeTextProcessing only affect MOSS-TTS text normalisation and
+    # 7) pynini/WeTextProcessing only affect MOSS-TTS text normalisation and
     #    have no wheels on macOS / ARM Linux, so drop them where needed.
     if not (args.keep_pynini or _platform_has_pynini_wheel()):
         removed = _drop_dependency(runtime / "pyproject.toml",
@@ -1160,9 +1536,11 @@ def cmd_setup(args) -> int:
             log("platform without pynini wheels: dropped optional deps "
                 f"{', '.join(removed)} (MOSS TTS text normalisation unavailable)")
 
-    # 6) create the venv
+    # 8) create the venv
+    sync_ok = False
     if args.no_sync:
         log("skipping `uv sync` (--no-sync)")
+        sync_ok = (runtime / ".venv").is_dir()
     else:
         env = os.environ.copy()
         index = args.index_url or os.environ.get("UV_DEFAULT_INDEX") or DEFAULT_INDEX
@@ -1185,18 +1563,22 @@ def cmd_setup(args) -> int:
         venv = runtime / ".venv"
         if venv.is_dir():
             log(f"venv: {venv} ({_dir_size_mb(venv):.0f} MB)")
+            sync_ok = True
         else:
             log("WARNING: .venv not found after `uv sync`")
 
-    # 6) pre-fetch ASR models: reuse any local cache, download only what is missing
+    # 9) pre-fetch ASR models: reuse any local cache, download only what is missing
     if args.models:
         for model in [m.strip() for m in args.models.split(",") if m.strip()]:
             prefetch_model(runtime, model, proxy)
 
-    # 7) optional local LLM backend
+    # 10) optional local LLM backend
     if args.with_ollama:
         provision_ollama(proxy, auto=auto)
         ensure_ollama_ready(args.ollama_model, auto=auto)
+
+    # 11) the new runtime is ready: remove migrated pre-1.3 state
+    _cleanup_legacy(legacy_home, legacy_tools, runtime, sync_ok)
 
     if not _is_program(runtime):
         fail("bootstrap finished but cli.py is still missing", code=1)
@@ -1702,11 +2084,9 @@ def cmd_run(args) -> int:
             print(json.dumps({**summary, "ok": False}, ensure_ascii=False, indent=2))
         else:
             log(f"\n[FAILED] pyVideoTrans exited with code {proc.returncode} after {elapsed:.1f}s")
-            logs = home / "videotrans" / "logs"
-            if logs.is_dir():
-                recent = sorted(logs.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-                if recent:
-                    log(f"last log: {recent[0]}")
+            log_path = latest_log(home)
+            if log_path:
+                log(f"last log: {log_path}")
         return 1
 
     if not produced:
@@ -1778,11 +2158,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"trans_cli {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("setup", help="create/update the bundled runtime and install dependencies")
+    p = sub.add_parser("setup", help="create/update the vendored runtime and install dependencies")
     add_common(p)
-    p.add_argument("--copy-from", help="source pyVideoTrans checkout to copy from")
-    p.add_argument("--force", action="store_true", help="re-copy the source even if the runtime exists")
-    p.add_argument("--no-sync", action="store_true", help="copy only, do not run `uv sync`")
+    p.add_argument("--copy-from", help="source pyVideoTrans checkout to copy into vendor/")
+    p.add_argument("--force", action="store_true",
+                   help="re-run provisioning; re-copy only when --copy-from is given")
+    p.add_argument("--migrate-from", metavar="DIR",
+                   help="migrate models/tools/params from a pre-1.3 package root "
+                        "or a pyvideotrans tree")
+    p.add_argument("--no-sync", action="store_true",
+                   help="probe/migrate/copy only, do not run `uv sync`")
     p.add_argument("--index-url", help=f"PyPI index (default: {DEFAULT_INDEX})")
     p.add_argument("--proxy", help="HTTP(S) proxy, e.g. http://127.0.0.1:2080")
     p.add_argument("--torch", choices=("auto", "cpu", "cu128"), default="auto",

@@ -9,7 +9,7 @@ description: Translate, dub and subtitle videos/audio with the locally installed
 
 ## 先决条件与首次安装
 
-本包自带一份 pyVideoTrans 源码（`runtime/pyvideotrans/`）。首次使用：
+技能目录内自带一份 pyVideoTrans 源码（`<skill_dir>/vendor/pyvideotrans/`）。首次使用：
 
 ```bash
 python <skill_dir>/scripts/trans_cli.py doctor     # 看看这台机器检测到什么
@@ -21,11 +21,11 @@ python <skill_dir>/scripts/trans_cli.py check      # 自检
 
 | 依赖 | 处理方式 |
 |---|---|
-| uv | PATH 有就用；没有则下载官方二进制到 `tools/uv/` |
-| ffmpeg / ffprobe | PATH 有就用；`tools/ffmpeg/bin` 有就用；都没有才下载 |
+| uv | PATH 有就用；没有则下载到 `<skill_dir>/tools/uv.exe` |
+| ffmpeg / ffprobe | PATH 有就用；`<skill_dir>/tools/ffmpeg/bin` 有就用；都没有才下载 |
 | Python 3.10 | 由 uv 自动安装（系统已有则复用） |
 | PyTorch | `--torch auto`（默认）检测 NVIDIA GPU：有 GPU 用 cu128，否则用 CPU 轮子 |
-| ASR 模型 | `--models large-v3-turbo,tiny` 预取；先查包内/外部安装的模型缓存，命中就复制，未命中才下载 |
+| ASR 模型 | `--models large-v3-turbo,tiny` 预取；先查技能内/外部安装的模型缓存，命中就复制，未命中才下载 |
 | Ollama | 已安装则直接复用；`--with-ollama` 会下载便携版并拉取模型（体积较大） |
 | PyPI / GitHub | 默认清华镜像；代理自动读 `HTTPS_PROXY` 或 git 配置 |
 
@@ -36,10 +36,15 @@ python <skill_dir>/scripts/trans_cli.py check      # 自检
 ... setup --models large-v3-turbo  # 预取默认模型（缓存命中则不下载）
 ... setup --with-ollama          # 连 Ollama 一起装好并拉取 qwen2.5:3b
 ... setup --no-download          # 离线模式：缺什么就报错，不联网
-... setup --no-sync              # 只做探测/复制，不装依赖
+... setup --no-sync              # 只做探测/迁移/复制，不装依赖
+... setup --copy-from <dir>      # 从指定源码替换 vendor/pyvideotrans
+... setup --force                # 重新执行配置与依赖安装（仅在给 --copy-from 时重新复制）
+... setup --migrate-from <dir>   # 显式迁移旧布局的 models/tools/params
 ```
 
-安装位置解析顺序：`--home` > `PYVIDEOTRANS_HOME` > 包内 `runtime/pyvideotrans` > 外部 `~/pyvideotrans`。
+`setup` 会自动迁移旧版的 `runtime/pyvideotrans`（仅当同级存在本包启动器时自动识别）：移动 `models`、`logs`、`params.json`、`tools`，并用 uv 缓存重建 `.venv`；`uv sync` 成功后才删除旧状态。全局安装目录下若存在无关的 `~/runtime/pyvideotrans`，不会自动迁移，需显式传 `--migrate-from`。
+
+安装位置解析顺序：`--home` > `PYVIDEOTRANS_HOME` > 技能内 `<skill_dir>/vendor/pyvideotrans` > 外部 `~/pyvideotrans`。
 
 `<skill_dir>` 是本 SKILL.md 所在目录。脚本只用 Python 标准库，用任意 Python 3.10+ 运行即可。
 
@@ -59,19 +64,19 @@ RESULT: 9 passed, 0 failed, 0 skipped in 43.8s
 
 ## 可迁移部署
 
-整个 `trans_video_cli/` 目录可以直接打包拷走（源码约 16 MB）：
+**技能目录本身就是分发包**：单独复制 `<skill_dir>/`（即 `.claude/skills/trans-video-cli/`）到目标机的 `~/.claude/skills/` 即可（源码约 19 MB，其中 pyVideoTrans 源码约 16 MB）：
 
-1. 拷贝目录（排除 `.venv`、`models`、`tools/_cache`、`tmp`、`logs`）；
-2. 目标机运行 `setup`——自动补齐 uv/ffmpeg/Python/PyTorch，缓存命中则跳过下载；
-3. `setup` 会清空 `params.json` 里所有 `*_key` 字段，使用前通过环境变量（如 `DEEPSEEK_API_KEY`）或 `--api-key` 提供凭证。
+1. 拷贝技能目录，排除 `tools/` 和 `vendor/pyvideotrans/` 下的生成状态（`.venv`、`models`、`output`、`tmp`、`logs`、`params.json`、`cfg.json` 等）；
+2. 目标机运行 `<skill_dir>/scripts/trans_cli.py setup`——自动补齐 uv/ffmpeg/Python/PyTorch，缓存命中则跳过下载；
+3. 从外部源码**新建复制**时，`setup` 会清空 `params.json` 里的 `*_key`；技能目录内已有或迁移过来的 `params.json` 会保留。使用前也可通过环境变量（如 `DEEPSEEK_API_KEY`）或 `--api-key` 提供凭证。
 
-`.venv` 不随包分发（Windows 的 venv 含绝对路径）；模型与工具在目标机首次 `setup` 时自动获取。
+`.venv` 不随包分发（Windows 的 venv 含绝对路径）；模型与工具在目标机首次 `setup` 时自动获取。旧布局（1.2 及更早）可以用 `setup --migrate-from <旧包根>` 迁移。
 
 ## 跨平台支持
 
 | 能力 | Windows | Linux x86_64 | Linux arm64 | macOS |
 |---|---|---|---|---|
-| 包内运行时 + venv | ✅ | ✅ | ✅ | ✅ |
+| 技能内 vendor 运行时 + venv | ✅ | ✅ | ✅ | ✅ |
 | uv 自动获取 | ✅ | ✅ | ✅ | ✅ |
 | ffmpeg 自动获取 | ✅ 下载静态包 | ✅ 下载静态包 | ✅ 下载静态包 | ⚠️ 有 brew/port 时自动安装，否则给出命令 |
 | PyTorch | cu128 / CPU | cu128 / CPU | CPU | CPU |
@@ -84,7 +89,7 @@ RESULT: 9 passed, 0 failed, 0 skipped in 43.8s
 - `pynini` 只有 Windows 与 Linux x86_64 的预编译轮子。其他平台 `setup` 会自动移除 `pynini` 与 `WeTextProcessing`——它们只用于 MOSS TTS 的文本规范化，不影响主流程；可用 `--keep-pynini` 强制保留。
 - macOS 的 ffmpeg 通过 `brew install ffmpeg` / `port install ffmpeg` 安装；Ollama 请从官网安装。
 - `--torch auto` 会按平台与 NVIDIA GPU 自动选择 cu128 或 CPU 轮子。
-- 启动器：Windows 用 `trans.cmd`，macOS/Linux 用 `./trans`（均转发到同一个脚本）。
+- 启动器：仓库根目录提供 `trans.cmd`（Windows）与 `./trans`（macOS/Linux），均转发到同一个脚本。只安装了技能目录时，直接调用 `python <skill_dir>/scripts/trans_cli.py ...`。
 
 ## 跨平台启动器
 
@@ -100,7 +105,7 @@ trans.cmd vtv movie.mp4 --source zh-cn --target en
 
 ## 四条必须遵守的规则
 
-1. **永远不要把输入文件放进输出目录。** 上游在每个任务开始时对 `--output-dir` 执行 `shutil.rmtree`（`--clear_cache` 默认开启）。包装脚本会拒绝这种用法，并且默认把结果写到输入的**同级新目录** `<文件名>_translated/`。
+1. **永远不要把输入文件放进输出目录。** 上游在每个任务开始时对 `--output-dir` 执行 `shutil.rmtree`（`--clear_cache` 默认开启）。包装脚本会拒绝这种用法，也会拒绝与技能安装目录重叠的输出目录，并且默认把结果写到输入的**同级新目录** `<文件名>_translated/`。
 2. **优先用这个包装脚本，不要直接调 `cli.py`。** 上游 CLI 的 `--translate_type` / `--tts_type` / `--model_name` 都有不安全的默认值（分别是 Google、Edge、**tiny**），包装脚本会从 `params.json` 读配置并显式传参。
 3. **默认 ASR 模型是 `large-v3-turbo`。** 准确率接近 `large-v3`，体积约 1.6 GB、速度约为其两倍，适合作为默认值。追求极致准确率用 `--asr-model large-v3`（约 3 GB）；`tiny` / `base` 只适合快速验证链路。
 4. **不熟悉的渠道先跑 `test-channel` 验证凭证。** 尤其 DeepSeek：用 `GET /models` 验 Key 会得到**假阴性**（有效 Key 也报 invalid），必须用对话接口验证。见 `references/troubleshooting.md`。
@@ -149,7 +154,7 @@ python <skill_dir>/scripts/trans_cli.py sts "D:\subs\demo.srt" --source zh-cn --
 | 智谱 / 阿里百炼 / 硅基流动 | `zhipuai` / `bailian` / `siliconflow` | 需要对应 Key |
 | 免费（Google / Microsoft） | `google` / `microsoft` | 无 Key，但国内常不可达 |
 
-切换渠道并写入凭证（会写入 `videotrans/params.json`，脚本不会把 Key 打印出来）：
+切换渠道并写入凭证（会写入 `<skill_dir>/vendor/pyvideotrans/videotrans/params.json`，脚本不会把 Key 打印出来）：
 
 ```bash
 # 方式 A：Key 已在环境变量里（推荐）

@@ -4,29 +4,34 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# Virtual environment and provisioned tools (created by `setup`)
-runtime/pyvideotrans/.venv/
+# Virtual environment (never distributed; rebuilt by `setup`)
 .venv/
-tools/
 
-# Runtime state: may contain API keys and machine-specific paths
-runtime/pyvideotrans/videotrans/params.json
-runtime/pyvideotrans/videotrans/params.json.bak
-runtime/pyvideotrans/videotrans/params.json.tmp
-runtime/pyvideotrans/videotrans/cfg.json
-runtime/pyvideotrans/videotrans/codec.json
-runtime/pyvideotrans/videotrans/languages.json
-runtime/pyvideotrans/videotrans/voicejson/camb_languages.json
+# Provisioned tools and download cache (created by `setup`)
+.claude/skills/trans-video-cli/tools/
+
+# Vendored runtime state: may contain API keys and machine-specific paths
+.claude/skills/trans-video-cli/vendor/pyvideotrans/videotrans/params.json
+.claude/skills/trans-video-cli/vendor/pyvideotrans/videotrans/params.json.bak
+.claude/skills/trans-video-cli/vendor/pyvideotrans/videotrans/params.json.tmp
+.claude/skills/trans-video-cli/vendor/pyvideotrans/videotrans/cfg.json
+.claude/skills/trans-video-cli/vendor/pyvideotrans/videotrans/codec.json
+.claude/skills/trans-video-cli/vendor/pyvideotrans/videotrans/languages.json
+.claude/skills/trans-video-cli/vendor/pyvideotrans/videotrans/voicejson/camb_languages.json
 
 # ASR models, task output, temp files and logs
-runtime/pyvideotrans/models/
-runtime/pyvideotrans/output/
-runtime/pyvideotrans/tmp/
-runtime/pyvideotrans/logs/
+.claude/skills/trans-video-cli/vendor/pyvideotrans/models/
+.claude/skills/trans-video-cli/vendor/pyvideotrans/output/
+.claude/skills/trans-video-cli/vendor/pyvideotrans/tmp/
+.claude/skills/trans-video-cli/vendor/pyvideotrans/logs/
 *.log
 
 # Bundled ffmpeg binaries (downloaded, not source)
-runtime/pyvideotrans/ffmpeg/bin/
+.claude/skills/trans-video-cli/vendor/pyvideotrans/ffmpeg/bin/
+
+# Legacy layout (pre-1.3). Kept ignored until `setup` migration removes it.
+/runtime/
+/tools/
 
 # OS / editor
 .DS_Store

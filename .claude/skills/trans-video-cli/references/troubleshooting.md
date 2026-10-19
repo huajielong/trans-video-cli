@@ -4,8 +4,8 @@
 
 ## `setup` 失败 / 初始化不成功
 
-**`no source checkout to copy from`**
-运行时目录还不存在，且找不到可复制的源码。用 `--copy-from <dir>` 指向一个包含 `cli.py` 的 pyVideoTrans 目录。
+**`vendored pyVideoTrans source is missing`**
+技能内 `vendor/pyvideotrans` 缺少 `cli.py`。重新安装技能目录，或用 `--copy-from <dir>` 指向一个包含 `cli.py` 的 pyVideoTrans 目录。
 
 **`uv sync` 下载失败 / 卡住**
 - 确认 `uv` 在 PATH（或设置 `UV_BIN`）。
@@ -14,7 +14,7 @@
 - PyTorch 轮子来自 `download.pytorch.org`，国内直连通常只有几百 KB/s，走代理会快很多。
 
 **`venv not found after uv sync`**
-检查 `runtime\pyvideotrans\pyproject.toml` 和 `.python-version` 是否完整；可 `setup --force` 重新复制后再试。
+检查 `vendor\pyvideotrans\pyproject.toml` 和 `.python-version` 是否完整；可 `setup --copy-from <dir>` 重新复制后再试。
 
 **磁盘空间**
 `.venv` 约 8.3 GB，模型另算（`large-v3` 约 3 GB）。确保目标盘有 15 GB 以上余量。无 NVIDIA GPU 时用 `--torch cpu` 可省约 3 GB。
@@ -29,10 +29,31 @@
 Windows 版约 1.5 GB，只在需要本地翻译渠道时用 `--with-ollama`。已安装 Ollama 会自动复用，不会重复下载；缺模型时会通过 `/api/pull` 自动拉取。
 
 **离线环境**
-加 `--no-download`，缺什么会明确报错。保留 `tools\_cache\` 与 `runtime\pyvideotrans\models\` 可实现离线重装。
+加 `--no-download`，缺什么会明确报错。保留 `<skill_dir>\tools\_cache\` 与 `<skill_dir>\vendor\pyvideotrans\models\` 可实现离线重装。
 
 **Windows venv 不能直接拷贝**
 venv 内含绝对路径。换机器/换目录时不要复制 `.venv`，重新运行 `setup` 更可靠。
+
+## 布局迁移（1.2 → 1.3）
+
+**升级后数据在哪里**
+1.3 起源码和运行状态都在技能目录内。首次运行 `setup` 会把旧 `runtime/pyvideotrans` 的 `models`、`logs`、`params.json` 和旧 `tools/` 迁移到技能目录，并用 uv 缓存重建 `.venv`；只有 `uv sync` 成功后才删除旧内容。
+
+**旧目录没有被迁移**
+- 自动迁移只在旧包根存在 `trans.cmd` / `trans` 启动器时生效。全局安装（`~/.claude/skills/...`）下推算出的 `~/runtime/pyvideotrans` 可能是无关目录，脚本会忽略并打印 note。
+- 显式迁移：`setup --migrate-from <旧包根或旧 pyvideotrans 目录>`。
+
+**清理被推迟**
+`--no-sync`、`uv sync` 失败或新 `.venv` 不存在时不会删除旧 `.venv`，日志会提示 "legacy cleanup deferred"。
+
+**文件被占用**
+Windows 下旧 `.venv` / 日志可能被运行中的进程锁定。关闭 trans / uv / Ollama 后重跑 `setup`。
+
+**跨盘迁移**
+同一磁盘内移动是重命名；`--migrate-from` 跨盘时会真实复制模型，先确认目标盘空间。
+
+**只读技能目录**
+`setup` 会先写探测文件；不可写时以退出码 2 失败，提示复制到可写位置。
 
 ## `[Failed] Task error: <文件> is not exists`
 
@@ -74,7 +95,7 @@ Windows 中文控制台默认 GBK。包装脚本已为子进程设置 `PYTHONUTF
 ## 模型下载慢 / 卡住
 
 - `setup --models <name>` 优先**直连 hf-mirror**；失败后自动回退到 `huggingface.co` + 代理。
-- 先查缓存：包内 `runtime\pyvideotrans\models\` 与外部安装的 `models\` 都会命中，命中则直接复制，不联网。
+- 先查缓存：技能内 `vendor\pyvideotrans\models\` 与外部安装的 `models\` 都会命中，命中则直接复制，不联网。
 - 运行任务时，应用自身优先 ModelScope（faster-whisper 系列），其他模型走 `huggingface.co`，不通时回落 `hf-mirror.com`。
 - 可显式指定：`set HF_ENDPOINT=https://hf-mirror.com`
 - 若配置了本地代理，应用会自动读取（例如 `http://127.0.0.1:2080`）；`NO_PROXY` 已包含 `127.0.0.1` / `localhost`，本地服务不会被代理。
@@ -96,7 +117,7 @@ python <skill_dir>/scripts/trans_cli.py check
 ## 任务失败但看不出原因
 
 1. 看包装脚本打印的 `last log` 路径。
-2. 日志目录：`<pyvideotrans>\videotrans\logs\*.log`
+2. 日志目录：`<pyvideotrans>\logs\*.log`（包装脚本也会回退查找 `<pyvideotrans>\videotrans\logs\`）
 3. 临时目录：`<pyvideotrans>\tmp\<pid>\<uuid>\`（音频、中间字幕、分片）
 
 ## GPU 没被使用
@@ -136,7 +157,7 @@ LLM 渠道可能返回不符合 SRT 格式的内容。处理顺序：
 
 - 默认输出到新的 `<输入名>_translated/`，重名时自动加 `-2`、`-3`。
 - 显式 `--outdir` 且目录非空时**拒绝执行**，除非加 `--overwrite`（表示你确认可以删）。
-- 拒绝把输出目录设为输入所在目录、用户主目录、盘符根目录或 pyvideotrans 安装目录。
+- 拒绝把输出目录设为输入所在目录、用户主目录、盘符根目录、pyvideotrans 安装目录，或与技能目录重叠（技能目录本身及其祖先/子目录）。
 
 ## 跨平台问题
 
@@ -153,7 +174,7 @@ LLM 渠道可能返回不符合 SRT 格式的内容。处理顺序：
 `--torch auto` 会选 CPU 轮子；也可显式 `--torch cpu` 省下约 3 GB 下载。
 
 **路径与启动器**
-包内路径统一用 `pathlib`。默认回退安装路径：各平台统一为 `~/pyvideotrans`（仅当包内 `runtime/` 不存在时使用）。启动器：`trans.cmd`（Windows）、`./trans`（macOS/Linux）。
+所有路径统一用 `pathlib` 并相对技能目录解析。默认回退安装路径：各平台统一为 `~/pyvideotrans`（仅当技能内 `vendor/pyvideotrans` 不存在时使用）。启动器：仓库根目录的 `trans.cmd`（Windows）与 `./trans`（macOS/Linux）；只安装技能目录时直接调用 `<skill_dir>/scripts/trans_cli.py`。
 
 ## 不要跑上游的 pytest
 
