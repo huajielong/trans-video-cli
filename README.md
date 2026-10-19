@@ -124,81 +124,53 @@ python .claude\skills\trans-video-cli\scripts\trans_cli.py tts "D:\subs\demo.srt
 
 本项目本身就是一个 Claude Code 技能：`SKILL.md` 描述何时触发、如何调用，`references/` 提供渠道、语言、模型和排错资料。注册后，Agent 可以直接把自然语言需求转成 CLI 命令。
 
-### 1. 注册技能
+### 1. 在线安装技能
 
-**方式 A：项目级注册（推荐）**
+在任意 Agent（或终端）里执行下面的流程，从 GitHub 拉取技能并安装到用户级技能目录。Claude Code 会自动发现 `~/.claude/skills/`，安装后所有项目都可使用。
 
-在包含本目录的终端启动 Claude Code，或把本目录加入当前会话：
-
-```bash
-claude --add-dir C:\path\to\trans_video_cli
-```
-
-会话内也可以使用 `/add-dir C:\path\to\trans_video_cli`。Claude Code 会自动发现 `.claude\skills\trans-video-cli\`，`trans-video-cli` 技能随即可用。
-
-**方式 B：全局注册（所有项目可用）**
-
-技能目录现在完全自包含，推荐直接复制（或链接）到用户级技能目录：
-
-```bat
-:: 直接复制技能目录（排除生成状态，目标机再运行 setup）
-robocopy "C:\path\to\trans_video_cli\.claude\skills\trans-video-cli" ^
-  "%USERPROFILE%\.claude\skills\trans-video-cli" /E ^
-  /XD .venv models output tmp logs tools __pycache__ ^
-  /XF params.json params.json.bak params.json.tmp cfg.json codec.json languages.json camb_languages.json
-```
+需要 `git` 与 Python 3.10+；uv、ffmpeg、PyTorch 和模型由后续的 `setup` 自动补齐。
 
 ```bash
 # macOS / Linux
-mkdir -p ~/.claude/skills
-rsync -a \
-  --exclude .venv --exclude models --exclude output --exclude tmp \
-  --exclude logs --exclude tools --exclude __pycache__ \
-  --exclude params.json --exclude cfg.json --exclude codec.json \
-  --exclude languages.json --exclude camb_languages.json \
-  /path/to/trans_video_cli/.claude/skills/trans-video-cli/ \
-  ~/.claude/skills/trans-video-cli/
+TMP_DIR="$(mktemp -d)"
+git clone --depth 1 https://github.com/huajielong/trans-video-cli.git "$TMP_DIR/trans-video-cli"
+mkdir -p ~/.claude/skills/trans-video-cli
+cp -R "$TMP_DIR/trans-video-cli/.claude/skills/trans-video-cli/." ~/.claude/skills/trans-video-cli/
+rm -rf "$TMP_DIR"
 ```
-
-也可以继续用目录联接/符号链接，避免复制 10 GB 级生成状态：
 
 ```bat
-:: Windows（cmd；目录联接不需要管理员权限）
-mklink /J "%USERPROFILE%\.claude\skills\trans-video-cli" "C:\path\to\trans_video_cli\.claude\skills\trans-video-cli"
+:: Windows（cmd）
+set "TMPCLONE=%TEMP%\trans-video-cli-install"
+if exist "%TMPCLONE%" rmdir /S /Q "%TMPCLONE%"
+git clone --depth 1 https://github.com/huajielong/trans-video-cli.git "%TMPCLONE%"
+if not exist "%USERPROFILE%\.claude\skills\trans-video-cli" mkdir "%USERPROFILE%\.claude\skills\trans-video-cli"
+xcopy /E /I /Y "%TMPCLONE%\.claude\skills\trans-video-cli\*" "%USERPROFILE%\.claude\skills\trans-video-cli\"
+rmdir /S /Q "%TMPCLONE%"
 ```
 
-```bash
-# macOS / Linux
-ln -s /path/to/trans_video_cli/.claude/skills/trans-video-cli ~/.claude/skills/trans-video-cli
-```
+安装位置：`~/.claude/skills/trans-video-cli/`。重复安装会覆盖源码，但保留已有的 `.venv`、模型和 `params.json` 等生成状态。
 
-复制或链接完成后，在目标位置运行一次 `setup`。所有路径都相对技能目录解析，不再依赖仓库根目录。
-
-**方式 C：其他 Agent**
-
-任何能执行命令的 Agent 都可以直接调用，无需注册技能：
-
-```bat
-C:\path\to\trans_video_cli\trans.cmd vtv "D:\videos\demo.mp4" --source zh-cn --target en
-```
-
-全局安装后也可以直接调用脚本：
-
-```bat
-python "%USERPROFILE%\.claude\skills\trans-video-cli\scripts\trans_cli.py" vtv "D:\videos\demo.mp4" --source zh-cn --target en
-```
-
-把 `SKILL.md` 和 `references/` 一并作为上下文交给 Agent，效果接近 Claude Code 的技能。
+也可以直接把这段指令交给 Agent：「从 GitHub 安装 trans-video-cli 技能到 `~/.claude/skills`，然后运行 setup」。
 
 ### 2. 在 Agent 中首次初始化
 
 对 Agent 说“初始化 trans-video-cli 运行时”，或让它执行：
 
 ```bash
-python .claude\skills\trans-video-cli\scripts\trans_cli.py doctor
-python .claude\skills\trans-video-cli\scripts\trans_cli.py setup
-python .claude\skills\trans-video-cli\scripts\trans_cli.py check --gpu
-python .claude\skills\trans-video-cli\scripts\trans_cli.py selftest
+# macOS / Linux
+python3 ~/.claude/skills/trans-video-cli/scripts/trans_cli.py doctor
+python3 ~/.claude/skills/trans-video-cli/scripts/trans_cli.py setup
+python3 ~/.claude/skills/trans-video-cli/scripts/trans_cli.py check --gpu
+python3 ~/.claude/skills/trans-video-cli/scripts/trans_cli.py selftest
+```
+
+```bat
+:: Windows
+python "%USERPROFILE%\.claude\skills\trans-video-cli\scripts\trans_cli.py" doctor
+python "%USERPROFILE%\.claude\skills\trans-video-cli\scripts\trans_cli.py" setup
+python "%USERPROFILE%\.claude\skills\trans-video-cli\scripts\trans_cli.py" check --gpu
+python "%USERPROFILE%\.claude\skills\trans-video-cli\scripts\trans_cli.py" selftest
 ```
 
 `setup` 需要联网获取 uv、ffmpeg、Python 3.10、PyTorch 与 ASR 模型；首次安装通常占用 10 GB 以上（`.venv` 约 8 GB，模型另算），建议预留 15 GB 以上磁盘空间。凭证只通过环境变量（如 `DEEPSEEK_API_KEY`）或 `--api-key` 提供，不要写进 README，也不要提交 `params.json`。
@@ -215,14 +187,20 @@ python .claude\skills\trans-video-cli\scripts\trans_cli.py selftest
 
 Agent 会读取 `SKILL.md`，选择 `vtv` / `stt` / `sts` / `tts` 命令，并在必要时确认输入文件、目标语言和输出目录。
 
-也可以显式调用技能，或直接执行命令：
+也可以显式调用技能，或让其他 Agent 直接执行命令：
 
 ```text
 /trans-video-cli vtv "D:\videos\demo.mp4" --source zh-cn --target en
 ```
 
 ```bat
-C:\path\to\trans_video_cli\trans.cmd stt "D:\videos\demo.mp4"
+:: Windows
+python "%USERPROFILE%\.claude\skills\trans-video-cli\scripts\trans_cli.py" stt "D:\videos\demo.mp4"
+```
+
+```bash
+# macOS / Linux
+python3 ~/.claude/skills/trans-video-cli/scripts/trans_cli.py stt "/path/to/demo.mp4"
 ```
 
 建议让 Agent 先加 `--dry-run` 查看将要执行的命令；长任务加 `--json` 获取结构化结果。
